@@ -748,11 +748,6 @@ class Qwen3TTSCustomVoiceBasic:
     CATEGORY = "🧪AILab/🎙️QwenTTS"
 
     def generate(self, text, speaker, model_size, language, instruct="", unload_models=True, seed=-1):
-        import torch
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        if torch.cuda.is_available(): torch.cuda.synchronize()
         return _custom_voice_generate(
             text=text,
             speaker=speaker,
@@ -804,11 +799,6 @@ class Qwen3TTSCustomVoiceAdvanced:
     CATEGORY = "🧪AILab/🎙️QwenTTS"
 
     def generate(self, text, speaker, model_size, device, precision, language, instruct="", max_new_tokens=2048, do_sample=True, top_p=0.9, top_k=50, temperature=0.9, repetition_penalty=1.0, attention="auto", unload_models=True, seed=-1):
-        import torch
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        if torch.cuda.is_available(): torch.cuda.synchronize()
         return _custom_voice_generate(
             text=text,
             speaker=speaker,
@@ -851,11 +841,6 @@ class Qwen3TTSVoiceDesignBasic:
     CATEGORY = "🧪AILab/🎙️QwenTTS"
 
     def generate(self, text, instruct, model_size, language, unload_models=True, seed=-1):
-        import torch
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        if torch.cuda.is_available(): torch.cuda.synchronize()
         return _voice_design_generate(
             text=text,
             instruct=instruct,
@@ -905,11 +890,6 @@ class Qwen3TTSVoiceDesignAdvanced:
     CATEGORY = "🧪AILab/🎙️QwenTTS"
 
     def generate(self, text, instruct, model_size, device, precision, language, max_new_tokens=2048, do_sample=True, top_p=0.9, top_k=50, temperature=0.9, repetition_penalty=1.0, attention="auto", unload_models=True, seed=-1):
-        import torch
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        if torch.cuda.is_available(): torch.cuda.synchronize()
         return _voice_design_generate(
             text=text,
             instruct=instruct,
@@ -954,11 +934,6 @@ class Qwen3TTSVoiceCloneBasic:
     CATEGORY = "🧪AILab/🎙️QwenTTS"
 
     def generate(self, target_text, model_size, language, reference_audio=None, reference_text="", x_vector_only=False, voice=None, unload_models=True, seed=-1):
-        import torch
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        if torch.cuda.is_available(): torch.cuda.synchronize()
         return _voice_clone_generate(
             reference_audio=reference_audio,
             target_text=target_text,
@@ -1015,11 +990,6 @@ class Qwen3TTSVoiceCloneAdvanced:
     CATEGORY = "🧪AILab/🎙️QwenTTS"
 
     def generate(self, target_text, model_size, device, precision, language, reference_audio=None, reference_text="", x_vector_only=False, voice=None, max_new_tokens=2048, do_sample=True, top_p=0.9, top_k=50, temperature=0.9, repetition_penalty=1.0, attention="auto", unload_models=True, seed=-1):
-        import torch
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        if torch.cuda.is_available(): torch.cuda.synchronize()
         return _voice_clone_generate(
             reference_audio=reference_audio,
             target_text=target_text,
