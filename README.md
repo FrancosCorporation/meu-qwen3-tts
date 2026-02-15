@@ -239,3 +239,8 @@ GPL‑3.0 (see LICENSE).
 ## Credits
 - Qwen3‑TTS by Alibaba Qwen Team
 - ComfyUI community
+
+## 💎 Diferenciais FrancosCorp
+- Otimizado para AMD ROCm 6.4
+- Gestão agressiva de VRAM para evitar crashes em FP32
+- Sincronização de tensores injetada para estabilidade.
