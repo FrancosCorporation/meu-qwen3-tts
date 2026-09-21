@@ -1,5 +1,22 @@
 # Qwen3-TTS para ComfyUI — versão FrancosCorp
 
+## 🐳 Instalação e Execução (Docker) — recomendado
+
+### Pré-requisitos
+- [Docker](https://docs.docker.com/get-docker/) + Docker Compose
+
+### Rodar com Docker
+```bash
+docker compose up --build
+```
+Não é app standalone — é plugin do ComfyUI. Veja o README completo.
+
+### Sem Docker (local)
+```bash
+# É um plugin (custom nodes) para ComfyUI
+# copie a pasta para ComfyUI/custom_nodes/meu-qwen3-tts
+```
+
 **Custom nodes de Qwen3-TTS (12Hz) para ComfyUI**: CustomVoice, VoiceDesign e VoiceClone, com otimizações de VRAM para AMD ROCm e estabilidade em FP32.
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
