@@ -6,8 +6,18 @@ import tempfile
 import torch
 import torchaudio
 
-import folder_paths
-import AILab_QwenTTS as core
+try:
+    from . import nodes as core
+except ImportError:
+    import nodes as core
+try:
+    from .voice_storage import load_voice as _load_safe_voice
+    from .voice_storage import save_voice as _save_safe_voice
+    from .voice_storage import validate_voice_file, voice_library_dir
+except ImportError:
+    from voice_storage import load_voice as _load_safe_voice
+    from voice_storage import save_voice as _save_safe_voice
+    from voice_storage import validate_voice_file, voice_library_dir
 
 try:
     import whisper
@@ -133,20 +143,12 @@ def _sanitize_name(name: str) -> str:
 
 
 def _default_voice_dir():
-    try:
-        base = folder_paths.get_output_directory()
-    except Exception:
-        base = None
-    if not base:
-        base = os.path.join(os.path.dirname(__file__), "voice_library")
-    path = os.path.join(base, "qwen3-tts_voices")
-    os.makedirs(path, exist_ok=True)
-    return path
+    return str(voice_library_dir())
 
 
 def _build_prompt(reference_audio, reference_text, model_size, device, precision, x_vector_only):
-    model = core._load_model("Base", model_size, device, precision)
     audio_tuple = core._audio_to_tuple(reference_audio)
+    model = core._load_model("Base", model_size, device, precision)
     with core._maybe_autocast(core._resolve_device(device), precision):
         items = model.create_voice_clone_prompt(
             ref_audio=audio_tuple,
@@ -158,33 +160,13 @@ def _build_prompt(reference_audio, reference_text, model_size, device, precision
 
 def _save_voice(prompt_items, save_path: str | None, name: str | None):
     payload = _serialize_prompt_items(prompt_items)
-    if save_path and save_path.strip():
-        base_dir = save_path.strip()
-        os.makedirs(base_dir, exist_ok=True)
-    else:
-        base_dir = _default_voice_dir()
-    filename = f"{_sanitize_name(name or 'voice')}.pt"
-    path = os.path.join(base_dir, filename)
-
-    payload = {"version": 2, "prompt": payload}
-    torch.save(payload, path)
-    return path
+    return _save_safe_voice(payload, save_path, _sanitize_name(name or "voice"))
 
 
 def _load_voice_from_file(path: str):
     if not path:
         return None
-    try:
-        data = torch.load(path, map_location="cpu", weights_only=True)
-    except TypeError:
-        data = torch.load(path, map_location="cpu")
-    if isinstance(data, dict) and "prompt" in data:
-        payload = data["prompt"]
-    else:
-        payload = data
-    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        return _deserialize_prompt_items(payload)
-    return payload
+    return _deserialize_prompt_items(_load_safe_voice(path))
 
 
 def _get_prompt_item_class():
@@ -280,7 +262,7 @@ class Qwen3TTSVoicesLibrary:
                 "voice_name": ("STRING", {"default": "voice_1", "multiline": False, "tooltip": "Saved voice name (file name without extension)."}),
             },
             "optional": {
-                "save_path": ("STRING", {"default": "", "multiline": False, "tooltip": "Custom folder to save voices. Leave empty to use ComfyUI output/qwen3-tts_voices."}),
+                "save_path": ("STRING", {"default": "", "multiline": False, "tooltip": "Optional subfolder inside ComfyUI output/qwen3-tts_voices; paths outside are refused."}),
                 "unload_models": ("BOOLEAN", {"default": True, "tooltip": "Unload cached models after generation"}),
             },
         }
@@ -308,14 +290,7 @@ class Qwen3TTSVoicesLibrary:
         name = voice_name.strip() if voice_name else ""
         path = _save_voice(prompt_items, save_path, name or None)
         if unload_models:
-            try:
-                core._MODEL_CACHE.clear()
-                core.model_management.soft_empty_cache()
-                import gc
-                gc.collect()
-                gc.collect()
-            except Exception:
-                pass
+            core._clear_model_cache()
         return (path,)
 
 
@@ -327,7 +302,7 @@ class Qwen3TTSLoadVoice:
                 "voice_name": (cls._list_voices(), {"default": "", "tooltip": "Pick a saved voice from the default voice library folder."}),
             },
             "optional": {
-                "custom_path": ("STRING", {"default": "", "multiline": False, "tooltip": "Load a voice .pt from a custom full path. Overrides voice_name if set."}),
+                "custom_path": ("STRING", {"default": "", "multiline": False, "tooltip": "Load a .pt/.pth/.safetensors file inside the approved ComfyUI voice library. Overrides voice_name."}),
             },
         }
 
@@ -343,15 +318,19 @@ class Qwen3TTSLoadVoice:
             return [""]
         names = []
         for fname in os.listdir(root):
-            if fname.lower().endswith(".pt"):
+            if os.path.splitext(fname)[1].lower() in (".pt", ".pth", ".safetensors"):
+                try:
+                    validate_voice_file(os.path.join(root, fname))
+                except (ValueError, OSError):
+                    continue
                 names.append(fname)
-        return names or [""]
+        return sorted(names) or [""]
 
     def load(self, voice_name, custom_path=""):
         if custom_path and custom_path.strip():
-            return (custom_path.strip(),)
+            return (str(validate_voice_file(custom_path.strip())),)
         if voice_name:
-            return (os.path.join(_default_voice_dir(), voice_name),)
+            return (str(validate_voice_file(os.path.join(_default_voice_dir(), voice_name))),)
         return ("",)
 
 

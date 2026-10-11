@@ -14,8 +14,14 @@
 
 import os
 import sys
+import gc
+import hashlib
+import json
+import logging
+import shutil
+import stat
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional
+from typing import Any, Tuple, Optional
 from contextlib import nullcontext
 from collections import OrderedDict
 
@@ -30,8 +36,13 @@ except Exception:
     snapshot_download = None
 
 current_dir = Path(__file__).parent
+logger = logging.getLogger("Qwen3-TTS")
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
+try:
+    from .voice_storage import load_voice as _load_safe_voice
+except ImportError:
+    from voice_storage import load_voice as _load_safe_voice
 
 qwen_pkg_dir = current_dir / "qwen_tts"
 if qwen_pkg_dir.exists() and str(qwen_pkg_dir) not in sys.path:
@@ -184,9 +195,13 @@ MODEL_ID_MAP = {
     ("CustomVoice", "1.7B"): "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
     ("VoiceDesign", "1.7B"): "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
 }
-TOKENIZER_ID = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
+with open(current_dir / "model_checksums.json", "r", encoding="utf-8") as manifest_file:
+    MODEL_MANIFEST = json.load(manifest_file)["models"]
+
 ATTENTION_OPTIONS = ["auto", "sage_attn", "flash_attn", "sdpa", "eager"]
-_MODEL_CACHE: Dict[Tuple[str, str, str, str, str], Any] = {}
+MAX_CACHED_MODELS = 2
+_MODEL_CACHE: OrderedDict = OrderedDict()
+_VERIFIED_MODEL_FILES = {}
 
 
 def _available_devices():
@@ -327,52 +342,149 @@ def _get_tts_paths():
     return []
 
 
-def _find_local_model(model_id: str) -> Optional[str]:
-    model_name = model_id.split("/")[-1]
-    candidates = []
-    default_root = _model_store_root()
-    if os.path.isdir(default_root):
-        candidates.append(os.path.join(default_root, model_name))
-    try:
-        tts_roots = _get_tts_paths()
-        for root in tts_roots:
-            candidates.append(os.path.join(root, "Qwen3-TTS", model_name))
-    except Exception:
-        pass
+def _verify_model_files(model_path: str, model_id: str):
+    model_info = MODEL_MANIFEST.get(model_id)
+    if not model_info:
+        raise ValueError(f"Modelo sem revisão/checksum aprovado: {model_id}")
 
-    for path in candidates:
-        if os.path.isdir(path) and os.listdir(path):
+    root = Path(model_path).resolve()
+    fingerprints = []
+    for relative_path, expected in model_info["files"].items():
+        file_path = (root / relative_path).resolve()
+        if not file_path.is_relative_to(root) or not file_path.is_file():
+            raise RuntimeError(f"Arquivo obrigatório ausente ou fora do modelo: {relative_path}")
+        stat = file_path.stat()
+        if stat.st_size != expected["size_bytes"]:
+            raise RuntimeError(f"Tamanho não confere para {relative_path} em {root}")
+        fingerprints.append((relative_path, stat.st_size, stat.st_mtime_ns))
+
+    verification_key = (model_id, str(root), model_info["revision"], tuple(fingerprints))
+    if verification_key in _VERIFIED_MODEL_FILES:
+        return
+
+    for relative_path, expected in model_info["files"].items():
+        file_path = root / relative_path
+        digest = hashlib.sha256()
+        with file_path.open("rb") as model_file:
+            for chunk in iter(lambda: model_file.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected["sha256"]:
+            raise RuntimeError(f"SHA-256 não confere para {relative_path} em {root}; remova a pasta e baixe novamente")
+
+    _VERIFIED_MODEL_FILES[verification_key] = True
+
+
+def _find_local_model(model_id: str) -> Optional[str]:
+    if model_id not in MODEL_MANIFEST:
+        raise ValueError(f"Modelo fora da allowlist: {model_id}")
+
+    model_name = model_id.rsplit("/", 1)[-1]
+    try:
+        candidates = [os.path.join(_model_store_root(), model_name)]
+        tts_roots = _get_tts_paths()
+    except Exception:
+        logger.exception("Falha ao resolver os diretórios locais de modelo para %s", model_id)
+        raise
+    for root in tts_roots:
+        candidates.append(os.path.join(root, "Qwen3-TTS", model_name))
+
+    for path in dict.fromkeys(candidates):
+        try:
+            contents = os.listdir(path)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            logger.exception("Falha ao verificar a pasta local de modelo: %s", path)
+            raise
+        if contents:
+            model_root = Path(path)
+            arquivos_obrigatorios = MODEL_MANIFEST[model_id]["files"]
+            try:
+                status_arquivos = [
+                    (model_root / relative_path).stat()
+                    for relative_path in arquivos_obrigatorios
+                ]
+            except (FileNotFoundError, NotADirectoryError):
+                logger.warning("Download incompleto em %s; retomando a revisão fixa", path)
+                continue
+            except OSError:
+                logger.exception("Falha ao verificar pesos em %s", path)
+                raise
+            if any(not stat.S_ISREG(item.st_mode) for item in status_arquivos):
+                logger.warning("Download incompleto em %s; retomando a revisão fixa", path)
+                continue
+            _verify_model_files(path, model_id)
             return path
     return None
 
 
-def _download_model(model_id: str) -> Optional[str]:
+def _download_model(model_id: str) -> str:
+    if model_id not in MODEL_MANIFEST:
+        raise ValueError(f"Modelo fora da allowlist: {model_id}")
     if snapshot_download is None:
-        return None
+        raise RuntimeError("huggingface_hub não está instalado; instale as dependências do plugin")
+
+    model_info = MODEL_MANIFEST[model_id]
     target_root = _model_store_root()
-    os.makedirs(target_root, exist_ok=True)
-    target_dir = os.path.join(target_root, model_id.split("/")[-1])
-    if os.path.isdir(target_dir) and os.listdir(target_dir):
-        return target_dir
+    target_dir = os.path.join(target_root, model_id.rsplit("/", 1)[-1])
     try:
-        snapshot_download(repo_id=model_id, local_dir=target_dir, local_dir_use_symlinks=False)
+        os.makedirs(target_root, exist_ok=True)
+        livre = shutil.disk_usage(target_root).free
+        minimo = int(model_info["size_bytes"] * 1.1) + 512 * 1024 * 1024
+        if livre < minimo:
+            raise OSError(
+                f"espaço insuficiente: {livre / 1024**3:.1f} GiB livres; "
+                f"são necessários aproximadamente {minimo / 1024**3:.1f} GiB"
+            )
+        snapshot_download(
+            repo_id=model_id,
+            revision=model_info["revision"],
+            local_dir=target_dir,
+            local_dir_use_symlinks=False,
+        )
+        _verify_model_files(target_dir, model_id)
         return target_dir
-    except Exception as e:
-        print(f"[Qwen3-TTS] Download failed for {model_id}: {e}")
-        return None
+    except Exception as exc:
+        logger.exception("Falha ao preparar o modelo %s na pasta %s", model_id, target_dir)
+        try:
+            livre = shutil.disk_usage(target_root).free
+            detalhe_espaco = f" Espaço livre: {livre / 1024**3:.1f} GiB."
+        except OSError:
+            detalhe_espaco = " Não foi possível consultar o espaço livre."
+        raise RuntimeError(
+            f"Não foi possível baixar/verificar {model_id} na revisão "
+            f"{model_info['revision']}: {exc}.{detalhe_espaco}"
+        ) from exc
 
 
 def _resolve_model_source(model_id: str) -> str:
+    if model_id not in MODEL_MANIFEST:
+        raise ValueError(f"Modelo fora da allowlist: {model_id}")
     local_path = _find_local_model(model_id)
     if local_path:
         return local_path
-    dl_path = _download_model(model_id)
-    if dl_path:
-        return dl_path
-    return model_id
+    return _download_model(model_id)
 
 
 def _load_model(model_type: str, model_size: str, device_choice: str, precision: str, attention: str = "auto"):
+    tipos = {"base": "Base", "customvoice": "CustomVoice", "voicedesign": "VoiceDesign"}
+    tamanhos = {"0.6b": "0.6B", "1.7b": "1.7B"}
+    precisao = {"fp32": "fp32", "float32": "fp32", "fp16": "fp16", "float16": "fp16",
+                "bf16": "bf16", "bfloat16": "bf16"}
+    dispositivos = {"auto", "cuda", "mps", "cpu"}
+    model_type = tipos.get(str(model_type).strip().lower())
+    model_size = tamanhos.get(str(model_size).strip().lower())
+    precision = precisao.get(str(precision).strip().lower())
+    device_choice = str(device_choice).strip().lower()
+    attention = str(attention).strip().lower()
+    if model_type is None or model_size is None:
+        raise ValueError("Tipo ou tamanho de modelo inválido")
+    if precision is None:
+        raise ValueError("Precisão inválida; use fp32, fp16 ou bf16")
+    if device_choice not in dispositivos:
+        raise ValueError("Dispositivo inválido; use auto, cuda, mps ou cpu")
+    if attention not in ATTENTION_OPTIONS:
+        raise ValueError(f"Backend de atenção inválido: {attention}")
     if model_type == "VoiceDesign" and model_size != "1.7B":
         raise ValueError("VoiceDesign only supports 1.7B models.")
     if Qwen3TTSModel is None:
@@ -387,15 +499,21 @@ def _load_model(model_type: str, model_size: str, device_choice: str, precision:
     model_id = MODEL_ID_MAP.get((model_type, model_size))
     if model_id is None:
         raise ValueError(f"Unsupported model type/size: {model_type}/{model_size}")
+    revision = MODEL_MANIFEST[model_id]["revision"]
 
     device = _resolve_device(device_choice)
     dtype = _resolve_dtype(precision, device)
 
     attn_impl = _resolve_attention_impl(attention, device)
+    if attn_impl == "sage_attn" and not _sage_attn_available():
+        logger.warning("sage_attn não está disponível; usando o backend padrão")
+        attn_impl = None
     cache_key = (model_type, model_size, device, precision, attn_impl or "default")
     if cache_key in _MODEL_CACHE:
+        _MODEL_CACHE.move_to_end(cache_key)
         print(f"[Qwen3-TTS] Using cached model: {model_type} {model_size} on {device} ({precision})")
         return _MODEL_CACHE[cache_key]
+    logger.info("Cache miss de modelo; carregando chave normalizada %s", cache_key)
 
     source = _resolve_model_source(model_id)
     if device.startswith("cuda"):
@@ -407,15 +525,13 @@ def _load_model(model_type: str, model_size: str, device_choice: str, precision:
             pass
     try:
         if attn_impl == "sage_attn":
-            if not _sage_attn_available():
-                print("[Qwen3-TTS] sage_attn not available. Install 'sageattention' or choose another attention.")
-                attn_impl = None
-            else:
-                model = Qwen3TTSModel.from_pretrained(source, device_map=device, dtype=dtype)
-                _patch_sage_attention(model)
-                print("[Qwen3-TTS] attention: sage_attn")
-        if attn_impl != "sage_attn":
-            kwargs = {"device_map": device, "dtype": dtype}
+            model = Qwen3TTSModel.from_pretrained(
+                source, device_map=device, dtype=dtype, revision=revision
+            )
+            _patch_sage_attention(model)
+            print("[Qwen3-TTS] attention: sage_attn")
+        else:
+            kwargs = {"device_map": device, "dtype": dtype, "revision": revision}
             if attn_impl:
                 kwargs["attn_implementation"] = attn_impl
             model = Qwen3TTSModel.from_pretrained(source, **kwargs)
@@ -424,12 +540,42 @@ def _load_model(model_type: str, model_size: str, device_choice: str, precision:
     except Exception as e:
         if "attn_implementation" in str(e) or "flash" in str(e).lower():
             print("[Qwen3-TTS] attention unavailable, fallback to default attention")
-            model = Qwen3TTSModel.from_pretrained(source, device_map=device, dtype=dtype)
+            cache_key = (model_type, model_size, device, precision, "default")
+            if cache_key in _MODEL_CACHE:
+                _MODEL_CACHE.move_to_end(cache_key)
+                return _MODEL_CACHE[cache_key]
+            model = Qwen3TTSModel.from_pretrained(
+                source, device_map=device, dtype=dtype, revision=revision
+            )
         else:
-            raise e
+            raise
 
     _MODEL_CACHE[cache_key] = model
+    if len(_MODEL_CACHE) > MAX_CACHED_MODELS:
+        evicted_key, evicted_model = _MODEL_CACHE.popitem(last=False)
+        del evicted_model
+        logger.info("Modelo removido do cache LRU: %s", evicted_key)
+        gc.collect()
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                logger.exception("Falha ao liberar o cache CUDA após evicção")
     return model
+
+
+def _clear_model_cache():
+    _MODEL_CACHE.clear()
+    gc.collect()
+    try:
+        model_management.soft_empty_cache()
+    except Exception:
+        logger.exception("Falha ao liberar o cache do ComfyUI")
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            logger.exception("Falha ao liberar o cache CUDA")
 
 
 def _set_seed(seed: int):
@@ -470,17 +616,7 @@ def _deserialize_prompt_items(items):
 def _load_voice_from_file(path: str):
     if not path:
         return None
-    try:
-        data = torch.load(path, map_location="cpu", weights_only=True)
-    except TypeError:
-        data = torch.load(path, map_location="cpu")
-    if isinstance(data, dict) and "voice_clone_prompt" in data:
-        payload = data["voice_clone_prompt"]
-    else:
-        payload = data
-    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        return _deserialize_prompt_items(payload)
-    return payload
+    return _deserialize_prompt_items(_load_safe_voice(path))
 
 
 def _audio_to_tuple(audio: Any) -> Tuple[np.ndarray, int]:
@@ -512,25 +648,64 @@ def _audio_to_tuple(audio: Any) -> Tuple[np.ndarray, int]:
     if sr is None or waveform is None:
         raise ValueError("Invalid AUDIO input")
 
+    try:
+        sample_rate = float(sr.item() if hasattr(sr, "item") else sr)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("AUDIO sample rate must be between 8000 and 192000 Hz") from exc
+    if not np.isfinite(sample_rate) or not sample_rate.is_integer() or not 8000 <= sample_rate <= 192000:
+        raise ValueError("AUDIO sample rate must be between 8000 and 192000 Hz")
+    sample_rate = int(sample_rate)
+    max_samples = sample_rate * 30
+
     if isinstance(waveform, torch.Tensor):
         wav = waveform.detach()
-        if wav.dim() > 1:
-            wav = wav.squeeze()
-            if wav.dim() > 1:
+        if not wav.is_floating_point():
+            wav = wav.float()
+        if wav.dim() == 3:
+            if wav.shape[0] != 1:
+                raise ValueError("AUDIO reference must contain exactly one audio item")
+            wav = wav.squeeze(0)
+        if wav.dim() == 2:
+            if wav.shape[0] <= 8 and wav.shape[1] > 8:
                 wav = wav.mean(dim=0)
-        wav = wav.cpu().numpy()
+            elif wav.shape[1] <= 8 and wav.shape[0] > 8:
+                wav = wav.mean(dim=1)
+            else:
+                raise ValueError("AUDIO reference must contain mono audio or at most 8 channels")
+        if wav.dim() != 1:
+            raise ValueError("AUDIO reference has an unsupported shape")
+        if wav.numel() > max_samples:
+            raise ValueError("AUDIO reference exceeds the 30-second limit")
+        wav = wav.float().cpu().numpy()
     else:
-        wav = np.asarray(waveform)
-
-    if wav.ndim > 1:
-        wav = np.mean(wav, axis=0)
+        try:
+            wav = np.asarray(waveform)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AUDIO reference has an unsupported shape") from exc
+        if wav.ndim == 3:
+            if wav.shape[0] != 1:
+                raise ValueError("AUDIO reference must contain exactly one audio item")
+            wav = np.squeeze(wav, axis=0)
+        if wav.ndim == 2:
+            if wav.shape[0] <= 8 and wav.shape[1] > 8:
+                wav = np.mean(wav, axis=0)
+            elif wav.shape[1] <= 8 and wav.shape[0] > 8:
+                wav = np.mean(wav, axis=1)
+            else:
+                raise ValueError("AUDIO reference must contain mono audio or at most 8 channels")
+        if wav.ndim != 1:
+            raise ValueError("AUDIO reference has an unsupported shape")
+        if wav.size > max_samples:
+            raise ValueError("AUDIO reference exceeds the 30-second limit")
 
     wav = wav.astype(np.float32)
+    if not np.isfinite(wav).all():
+        raise ValueError("AUDIO reference contains invalid numeric values")
     if wav.size < 1024:
         pad = 1024 - wav.size
         wav = np.concatenate([wav, np.zeros(pad, dtype=np.float32)])
 
-    return wav, int(sr)
+    return wav, sample_rate
 
 
 def _to_comfy_audio(wavs, sr: int):
@@ -586,14 +761,8 @@ def _custom_voice_generate(
         )
     audio = _to_comfy_audio(wavs, sr)
     if unload_models:
-        _MODEL_CACHE.clear()
-        model_management.soft_empty_cache()
-        try:
-            import gc
-            gc.collect()
-            gc.collect()
-        except Exception:
-            pass
+        del model
+        _clear_model_cache()
     return (audio,)
 
 
@@ -633,14 +802,8 @@ def _voice_design_generate(
         )
     audio = _to_comfy_audio(wavs, sr)
     if unload_models:
-        _MODEL_CACHE.clear()
-        model_management.soft_empty_cache()
-        try:
-            import gc
-            gc.collect()
-            gc.collect()
-        except Exception:
-            pass
+        del model
+        _clear_model_cache()
     return (audio,)
 
 
@@ -668,6 +831,7 @@ def _voice_clone_generate(
     if not target_text or not target_text.strip():
         raise ValueError("Target text is required")
     prompt = None
+    audio_tuple = None
     if voice is not None:
         if isinstance(voice, str) and voice.strip():
             prompt = _load_voice_from_file(voice.strip())
@@ -681,6 +845,7 @@ def _voice_clone_generate(
                 raise ValueError("reference_text is required unless x_vector_only is enabled")
         if reference_audio is None:
             raise ValueError("reference_audio is required when voice is not provided")
+        audio_tuple = _audio_to_tuple(reference_audio)
     _set_seed(seed)
     model = _load_model("Base", model_size, device, precision, attention)
     mapped_lang = LANGUAGE_MAP.get(language, "auto")
@@ -698,7 +863,6 @@ def _voice_clone_generate(
                 repetition_penalty=repetition_penalty,
             )
         else:
-            audio_tuple = _audio_to_tuple(reference_audio)
             wavs, sr = model.generate_voice_clone(
                 text=target_text,
                 language=mapped_lang,
@@ -714,14 +878,8 @@ def _voice_clone_generate(
             )
     audio = _to_comfy_audio(wavs, sr)
     if unload_models:
-        _MODEL_CACHE.clear()
-        model_management.soft_empty_cache()
-        try:
-            import gc
-            gc.collect()
-            gc.collect()
-        except Exception:
-            pass
+        del model
+        _clear_model_cache()
     return (audio,)
 
 

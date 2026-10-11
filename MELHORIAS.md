@@ -505,3 +505,20 @@ git status --porcelain | grep -cE '\\.(pt|pth|bin|safetensors|onnx)$'   # 0
 
 *Fim do plano. Gerado por leitura direta do código em 2026-10-02. Nenhum item já estava corrigido*
 *— todos apontam para defeitos ainda presentes.*
+
+## Registro da execução — 2026-10-11
+
+Implementadas as proteções SEC-01/02/03/04, BUG-01/02, DEVOPS-01/02/03, IMP-01, PERF-01,
+IMP-02 (nota de reprodutibilidade) e DOC-01/02. Ambos os `torch.load` ativos agora exigem
+`weights_only=True`; perfis ficam limitados à biblioteca de vozes e preferem `safetensors` quando
+disponível. Modelos usam revisões completas e hashes/tamanhos do `model_checksums.json`; falhas de
+resolução/download são registradas e interrompem a geração. O cache mantém no máximo dois modelos,
+áudios de referência são validados antes do carregamento e pesos/vozes ficam cobertos pelo
+`.gitignore`. `__init__.py` também registra os nós de criação/leitura de voz, Whisper e duração de
+áudio que já eram descritos no README e usados pelos workflows.
+
+Pendente: TEST-01 e o teste de determinismo descrito em IMP-02 não foram adicionados. O CI executa
+compilação e verificações estáticas sem instalar PyTorch, baixar pesos ou rodar inferência. Nenhum
+teste, build, CI ou download de modelo foi executado nesta etapa; por isso as caixas de aceite acima
+continuam abertas. Os SHA-256 do manifesto vêm dos metadados oficiais dos commits do Hugging Face e
+ainda precisam ser confrontados com os arquivos baixados em uma validação de ambiente.

@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "retrieved_at": "2026-10-11",
+  "models": {
+    "Qwen/Qwen3-TTS-12Hz-0.6B-Base": {
+      "revision": "5d83992436eae1d760afd27aff78a71d676296fc",
+      "license": "apache-2.0",
+      "size_bytes": 2516106051,
+      "files": {
+        "model.safetensors": {"sha256": "180b3b10eb1c9f1b4db7806d5475bae3071c0243c299d49926bab1da3b6946f6", "size_bytes": 1829344272},
+        "speech_tokenizer/model.safetensors": {"sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258", "size_bytes": 682293092}
+      }
+    },
+    "Qwen/Qwen3-TTS-12Hz-1.7B-Base": {
+      "revision": "fd4b254389122332181a7c3db7f27e918eec64e3",
+      "license": "apache-2.0",
+      "size_bytes": 4544229700,
+      "files": {
+        "model.safetensors": {"sha256": "38fc7fc51c5e776e840414b6fd443962e9411b9654888fd7913e4da643cb857c", "size_bytes": 3857413744},
+        "speech_tokenizer/model.safetensors": {"sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258", "size_bytes": 682293092}
+      }
+    },
+    "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice": {
+      "revision": "85e237c12c027371202489a0ec509ded67b5e4b5",
+      "license": "apache-2.0",
+      "size_bytes": 2498388392,
+      "files": {
+        "model.safetensors": {"sha256": "bc3c7e785eb961179c25450d1acff03f839e0002f2f3a5aeb67b5735c0fa2adb", "size_bytes": 1811626576},
+        "speech_tokenizer/model.safetensors": {"sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258", "size_bytes": 682293092}
+      }
+    },
+    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice": {
+      "revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe",
+      "license": "apache-2.0",
+      "size_bytes": 4520218951,
+      "files": {
+        "model.safetensors": {"sha256": "38b1d5971bdbd982b561cccec982669a53b0537c3cf5e9bd4778ed07bb2f5137", "size_bytes": 3833402552},
+        "speech_tokenizer/model.safetensors": {"sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258", "size_bytes": 682293092}
+      }
+    },
+    "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign": {
+      "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+      "license": "apache-2.0",
+      "size_bytes": 4520163832,
+      "files": {
+        "model.safetensors": {"sha256": "391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522", "size_bytes": 3833402552},
+        "speech_tokenizer/model.safetensors": {"sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258", "size_bytes": 682293092}
+      }
+    }
+  }
+}

@@ -5,18 +5,19 @@ version = "1.1.4"
 license = {file = "LICENSE"}
 
 dependencies = [
-  "accelerate>=1.12.0",
-  "einops>=0.8.1",
-  "huggingface_hub",
-  "librosa>=0.11.0",
-  "numpy",
-  "openai-whisper",
-  "sentencepiece>=0.2.1",
-  "soundfile>=0.13.1",
-  "tiktoken>=0.12.0",
-  "torch>=2.9.1",
-  "torchaudio>=2.9.1",
-  "transformers>=4.57.3",
+  "accelerate>=1.12.0,<2.0",
+  "einops>=0.8.1,<1.0",
+  "huggingface_hub>=0.34.0,<1.0",
+  "librosa>=0.11.0,<1.0",
+  "numpy>=1.26.4,<3.0",
+  "openai-whisper==20250625",
+  "safetensors>=0.4.3,<1.0",
+  "sentencepiece>=0.2.1,<1.0",
+  "soundfile>=0.13.1,<1.0",
+  "tiktoken>=0.12.0,<1.0",
+  "torch>=2.9.1,<2.10",
+  "torchaudio>=2.9.1,<2.10",
+  "transformers>=4.57.3,<5.0",
 ]
     
 [project.urls]

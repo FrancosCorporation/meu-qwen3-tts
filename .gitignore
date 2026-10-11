@@ -30,3 +30,9 @@ Thumbs.db
 # ComfyUI / modelos
 models/
 output/
+voice_library/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
